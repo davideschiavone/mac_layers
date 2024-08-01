@@ -45,6 +45,18 @@ class Conv2DLayer(Layer):
         output_channels = self.num_filters
         return output_height, output_width, output_channels
 
+    def calculate_filter_size(self):
+        filter_height = self.kernel_size
+        filter_width = self.kernel_size
+        filter_channels = self.input_channels
+        filter_number = self.num_filters
+        return filter_height, filter_width, filter_channels, filter_number
+
+    def layer_size(self):
+        filter_height, filter_width, filter_channels, filter_number = self.calculate_filter_size()
+        layer_size = filter_height * filter_width * filter_channels * filter_number
+        return layer_size
+
     def calculate_macs(self):
         output_height, output_width = self.output_height, self.output_width
         macs_per_filter = self.kernel_size * self.kernel_size * self.input_channels
@@ -71,6 +83,9 @@ class AvgPooling(Layer):
         output_channels = self.input_channels
         return output_height, output_width, output_channels
 
+    def layer_size(self):
+        return 0
+
     def calculate_macs(self):
         return 0
 
@@ -89,28 +104,18 @@ class SeparableConv2DLayer(Conv2DLayer):
     def calculate_macs(self):
 
         output_height, output_width = self.output_height, self.output_width
-        macs_per_separable_filter = self.kernel_size * self.kernel_size
-        total_separable_macs = output_height * output_width * macs_per_separable_filter * self.input_channels
+        macs_per_separable_filter = self.kernel_size * self.kernel_size * 1
+        total_separable_macs = output_height * output_width * macs_per_separable_filter * self.num_filters
 
         total_macs = total_separable_macs
         return total_macs
 
-class DepthWiseConv2DLayer(Conv2DLayer):
-
-    def __init__(self, layer_name, input_size, num_filters, kernel_size, stride, padding):
-        super().__init__(layer_name, input_size, num_filters, kernel_size, stride, padding)
-
-    def calculate_macs(self):
-
-        output_height, output_width = self.output_height, self.output_width
-        macs_per_separable_filter = self.kernel_size * self.kernel_size
-        total_separable_macs = output_height * output_width * macs_per_separable_filter * self.input_channels
-
-        macs_per_pointwise_filter = 1 * 1 * self.input_channels
-        total_pointwise_macs = output_height * output_width * macs_per_pointwise_filter * self.num_filters
-
-        total_macs = total_separable_macs + total_pointwise_macs
-        return total_macs
+    def calculate_filter_size(self):
+        filter_height = self.kernel_size
+        filter_width = self.kernel_size
+        filter_channels = 1
+        filter_number = self.num_filters
+        return filter_height, filter_width, filter_channels, filter_number
 
 class BottleNeck(Layer):
 
@@ -119,6 +124,11 @@ class BottleNeck(Layer):
         self.conv1_macs = 0
         self.separablewise_conv_macs = 0
         self.conv2_macs = 0
+
+        self.conv1 = None
+        self.separablewise_conv = None
+        self.conv2 = None
+
         self.output_height, self.output_width, self.output_channels = (0, 0, 0)
 
         super().__init__(layer_name, input_size)
@@ -129,7 +139,6 @@ class BottleNeck(Layer):
         self.padding = padding_depthwise_top
 
         self.conv1 = Conv2DLayer(f"{layer_name}/Conv2D_1_1x1", input_size, self.input_channels * expansion_factor, 1, 1, 0)
-        
         self.conv1_macs = self.conv1.calculate_macs()
 
         self.separablewise_conv = SeparableConv2DLayer(
@@ -154,6 +163,31 @@ class BottleNeck(Layer):
     
     def calculate_output_size(self):
         return self.output_height, self.output_width, self.output_channels
+
+    def layer_size(self):
+        if self.conv1 != None and self.separablewise_conv != None and self.conv2 != None:
+            return self.conv1.layer_size() + self.separablewise_conv.layer_size() + self.conv2.layer_size()
+        else:
+            return 0
+
+    def calculate_filter_size(self):
+        filter_size = None
+        if self.conv1 != None:
+            filter_height, filter_width, filter_channels, filter_number = self.conv1.calculate_filter_size()
+            filter_size.append((filter_height, filter_width, filter_channels, filter_number))
+        else:
+            return None
+        if self.separablewise_conv_macs != None:
+            filter_height, filter_width, filter_channels, filter_number = self.separablewise_conv_macs.calculate_filter_size()
+            filter_size.append((filter_height, filter_width, filter_channels, filter_number))
+        else:
+            return None
+        if self.conv2 != None:
+            filter_height, filter_width, filter_channels, filter_number = self.conv2.calculate_filter_size()
+            filter_size.append((filter_height, filter_width, filter_channels, filter_number))
+        else:
+            return None
+        return filter_size
 
 class InvertedResisualBlock(Layer):
     
