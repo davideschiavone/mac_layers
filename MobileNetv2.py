@@ -113,7 +113,7 @@ class MobileNetV2:
         self.layers.append(self.conv3)
 
     def __str__(self):
-        return self.model_name
+        return self.model_name + " with " + str(self.num_classes) + " classes"
 
     def calculate_macs(self):
         macs = 0
@@ -121,20 +121,33 @@ class MobileNetV2:
             macs += layer.calculate_macs()
         return macs
 
+    def layer_size(self):
+        layer_size = 0
+        for layer in self.layers:
+            layer_size += layer.layer_size()
+        return layer_size
+
     def print_model(self):
         for layer in self.layers:
             print(layer)
+            print("\n")
 
     def print_stat(self):
         total_macs = self.calculate_macs()
+        layer_size = self.layer_size()
 
         for layer in self.layers:
             percentage_mac = layer.calculate_macs()/total_macs * 100
-            print(f"{layer.layer_name}: {percentage_mac:.2f}%")
+            percentage_size = layer.layer_size()/layer_size * 100
+            print(f"{layer.layer_name}: MAC {percentage_mac:.2f}% SIZE {percentage_size:.2f}%")
+
+        print("\n")
 
 
-model = MobileNetV2("MobileNetV2")
 
+model = MobileNetV2("MobileNetV2", num_classes=4)
+
+print(model)
 
 print(f"Number of MMACs: {model.calculate_macs()/1e6:.2f}M")
 
@@ -142,3 +155,17 @@ print(f"Number of MMACs: {model.calculate_macs()/1e6:.2f}M")
 model.print_stat()
 
 model.print_model()
+
+
+Freq = 400*1e6 # 450 MHz
+
+MAC = model.calculate_macs()
+
+FPS = 21 #inferenced per second
+
+MACs = MAC*FPS
+
+MAC_cycles = MACs/Freq
+
+print(f"MAC_cycles: {MAC_cycles:.2f}")
+

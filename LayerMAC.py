@@ -23,9 +23,9 @@ class Layer:
 
     def __str__(self):
         return (f"Layer: {self.layer_name}\n"
-                f"Input Size: {self.input_height}x{self.input_width}x{self.input_channels}\n"
+                f"Input Size: {self.input_height}x{self.input_width}x{self.input_channels} ({self.input_height * self.input_width * self.input_channels})\n"
                 f"Output Size: {self.output_height}x{self.output_width}x{self.output_channels}\n"
-                f"Number of MMACs: {self.num_macs/1e6:.2f}M")
+                f"Number of KMACs: {self.num_macs/1e3:.2f}K")
 
 
 class Conv2DLayer(Layer):
@@ -50,11 +50,13 @@ class Conv2DLayer(Layer):
         filter_width = self.kernel_size
         filter_channels = self.input_channels
         filter_number = self.num_filters
-        return filter_height, filter_width, filter_channels, filter_number
+        return filter_height*filter_width*filter_channels*filter_number
 
     def layer_size(self):
-        filter_height, filter_width, filter_channels, filter_number = self.calculate_filter_size()
-        layer_size = filter_height * filter_width * filter_channels * filter_number
+        filter_size = self.calculate_filter_size()
+        layer_size = filter_size
+        layer_size += self.output_height*self.output_width*self.output_channels
+        layer_size += self.input_height*self.input_width*self.input_channels
         return layer_size
 
     def calculate_macs(self):
@@ -64,10 +66,13 @@ class Conv2DLayer(Layer):
         return total_macs
 
     def __str__(self):
+        filter_size = self.calculate_filter_size()
         return (f"Layer: {self.layer_name}\n"
-                f"Input Size: {self.input_height}x{self.input_width}x{self.input_channels}\n"
-                f"Output Size: {self.output_height}x{self.output_width}x{self.output_channels}\n"
-                f"Number of MMACs: {self.num_macs/1e6:.2f}M")
+                f"Input Size: {self.input_height}x{self.input_width}x{self.input_channels} ({self.input_height * self.input_width * self.input_channels})\n"
+                f"Output Size: {self.output_height}x{self.output_width}x{self.output_channels} ({self.output_height * self.output_width * self.output_channels})\n"
+                f"Filter Size: {filter_size}\n"
+                f"Layer Size: {self.layer_size()}\n"
+                f"Number of KMACs: {self.num_macs/1e3:.2f}K")
 
 class AvgPooling(Layer):
     def __init__(self, layer_name, input_size, kernel_size, stride):
@@ -93,7 +98,7 @@ class AvgPooling(Layer):
         return (f"Layer: {self.layer_name}\n"
                 f"Input Size: {self.input_height}x{self.input_width}x{self.input_channels}\n"
                 f"Output Size: {self.output_height}x{self.output_width}x{self.output_channels}\n"
-                f"Number of MMACs: {self.num_macs/1e6:.2f}M")
+                f"Number of KMACs: {self.num_macs/1e3:.2f}K")
 
 
 class SeparableConv2DLayer(Conv2DLayer):
@@ -115,7 +120,7 @@ class SeparableConv2DLayer(Conv2DLayer):
         filter_width = self.kernel_size
         filter_channels = 1
         filter_number = self.num_filters
-        return filter_height, filter_width, filter_channels, filter_number
+        return filter_height*filter_width*filter_channels*filter_number
 
 class BottleNeck(Layer):
 
@@ -165,29 +170,41 @@ class BottleNeck(Layer):
         return self.output_height, self.output_width, self.output_channels
 
     def layer_size(self):
+        filter_size = self.calculate_filter_size()
+        layer_size = filter_size
+        layer_size += self.output_height*self.output_width*self.output_channels
+        layer_size += self.input_height*self.input_width*self.input_channels
+
         if self.conv1 != None and self.separablewise_conv != None and self.conv2 != None:
             return self.conv1.layer_size() + self.separablewise_conv.layer_size() + self.conv2.layer_size()
         else:
             return 0
 
     def calculate_filter_size(self):
-        filter_size = None
+
+        filter_size = 0
         if self.conv1 != None:
-            filter_height, filter_width, filter_channels, filter_number = self.conv1.calculate_filter_size()
-            filter_size.append((filter_height, filter_width, filter_channels, filter_number))
+            filter_size += self.conv1.calculate_filter_size()
         else:
-            return None
-        if self.separablewise_conv_macs != None:
-            filter_height, filter_width, filter_channels, filter_number = self.separablewise_conv_macs.calculate_filter_size()
-            filter_size.append((filter_height, filter_width, filter_channels, filter_number))
+            return -1
+        if self.separablewise_conv != None:
+            filter_size += self.separablewise_conv.calculate_filter_size()
         else:
-            return None
+            return -1
         if self.conv2 != None:
-            filter_height, filter_width, filter_channels, filter_number = self.conv2.calculate_filter_size()
-            filter_size.append((filter_height, filter_width, filter_channels, filter_number))
+            filter_size += self.conv2.calculate_filter_size()
         else:
-            return None
+            return -1
+
         return filter_size
+
+    def __str__(self):
+        return (f"Layer: {self.layer_name}\n"
+                f"Input Size: {self.input_height}x{self.input_width}x{self.input_channels} ({self.input_height * self.input_width * self.input_channels})\n"
+                f"Output Size: {self.output_height}x{self.output_width}x{self.output_channels} ({self.output_height * self.output_width * self.output_channels})\n"
+                f"Filter Size: {self.calculate_filter_size()}\n"
+                f"Layer Size: {self.layer_size()}\n"
+                f"Number of KMACs: {self.num_macs/1e3:.2f}K")
 
 class InvertedResisualBlock(Layer):
     
@@ -209,9 +226,12 @@ class InvertedResisualBlock(Layer):
 
             next_input_size = self.bottleneck_array[i].calculate_output_size()
 
-        self.num_macs = 0  
+        self.num_macs = self.calculate_macs()  
         self.output_height, self.output_width, self.output_channels = self.bottleneck_array[-1].calculate_output_size()
         super().__init__(layer_name, input_size)
+
+    def get_layers(self):
+        return self.bottleneck_array
 
     def calculate_macs(self):
         self.num_macs = 0
@@ -222,4 +242,28 @@ class InvertedResisualBlock(Layer):
     def calculate_output_size(self):
         return self.output_height, self.output_width, self.output_channels
 
+    def layer_size(self):
+        if self.bottleneck_array != None:
+            layer_size = 0
+            for i in range(self.n_repeat):
+                layer_size += self.bottleneck_array[i].layer_size()
+            return layer_size
 
+    def calculate_filter_size(self):
+
+        filter_size = 0
+        if self.bottleneck_array != None:
+            for i in range(self.n_repeat):
+                filter_size += self.bottleneck_array[i].calculate_filter_size()
+            return filter_size
+        else:
+            return -1
+
+
+    def __str__(self):
+        return (f"Layer: {self.layer_name}\n"
+            f"Input Size: {self.input_height}x{self.input_width}x{self.input_channels} ({self.input_height * self.input_width * self.input_channels})\n"
+            f"Output Size: {self.output_height}x{self.output_width}x{self.output_channels} ({self.output_height * self.output_width * self.output_channels})\n"
+            f"Filter Size: {self.calculate_filter_size()}\n"
+            f"Layer Size: {self.layer_size()}\n"
+            f"Number of KMACs: {self.calculate_macs()/1e3:.2f}K")
